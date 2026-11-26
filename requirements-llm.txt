@@ -1,0 +1,5 @@
+# Optional: local LLM for the assistant (the rule-based planner works without it)
+# CPU: pip install llama-cpp-python
+# Jetson (CUDA): CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python --no-binary llama-cpp-python
+# Or skip this and point the assistant at Ollama ("backend": "openai").
+llama-cpp-python>=0.3.0

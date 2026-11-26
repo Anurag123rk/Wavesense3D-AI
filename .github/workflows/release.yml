@@ -1,0 +1,63 @@
+name: release
+
+# Creates GitHub releases from docs/releases/<tag>.md files.
+#   line 1          "# <release title>"
+#   "commit: <sha>" (optional) commit the release points to; default: the pushed commit
+#   the rest        release notes
+# For every notes file whose release does not exist yet, the release and its tag are created
+# on GitHub at that commit, with that commit's firmware, models and paper attached.
+on:
+  push:
+    paths: ["docs/releases/**", ".github/workflows/release.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: remove diagnostic drafts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          for id in $(gh api "repos/$GITHUB_REPOSITORY/releases" --jq '.[] | select(.draft and (.tag_name | startswith("diag-"))) | .id'); do
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id" && echo "deleted draft $id"
+          done
+      - name: create missing releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in $(ls docs/releases/v*.md | sort -V); do
+            tag=$(basename "$f" .md)
+            if gh release view "$tag" >/dev/null 2>&1; then
+              echo "$tag already released"; continue
+            fi
+            sha=$(grep -m1 '^commit:' "$f" | awk '{print $2}' || true)
+            sha=${sha:-$GITHUB_SHA}
+            title=$(head -1 "$f" | sed 's/^# *//')
+            tail -n +2 "$f" | grep -v '^commit:' > "/tmp/$tag-notes.md"
+            git worktree add "/tmp/$tag" "$sha"
+            assets=$(cd "/tmp/$tag" && ls firmware/release/*.bin models/*.npz models/*.onnx docs/paper/*.pdf docs/paper/*.docx 2>/dev/null | sed "s|^|/tmp/$tag/|" || true)
+            echo "creating $tag ($title) at $sha"
+            # Create the tag first, then the release on that existing tag. Creating both in one
+            # call fails with 403 for commits other than the pushed one.
+            if ! gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" >/dev/null 2>&1; then
+              if ! gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$tag" -f sha="$sha" >/dev/null; then
+                # The Actions token may not create a tag on an older commit whose workflow files
+                # differ from the current ones. Create that release once in the GitHub web UI
+                # (tag $tag, target $sha), then re-run this workflow for the later releases.
+                echo "::warning::Could not create tag $tag at $sha - create this release in the web UI, then re-run."
+                echo "Stopping so that releases stay in order."
+                exit 0
+              fi
+            fi
+            gh release create "$tag" --verify-tag --title "$title" --notes-file "/tmp/$tag-notes.md" $assets
+          done

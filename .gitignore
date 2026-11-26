@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+venv/
+.venv/
+data/recordings/
+data/baselines.json
+data/room.glb
+*.tmp
+*.upload
+firmware/**/build/
+firmware/**/sdkconfig
+models/room-*
+config/room.json
+models/*.tmp.npz
+.venv/
+# personal setup notes (contain WiFi credentials) - never commit
+MY_WAVESENSE_SETUP.txt
+
+# local LLM weights (download with scripts/get_llm.sh)
+models/llm
+*.gguf
+data/history.sqlite*

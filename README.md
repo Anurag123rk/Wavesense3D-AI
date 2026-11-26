@@ -1,1 +1,235 @@
-# Wavesense3D-AI
+# WaveSense 3D AI
+
+**WiFi CSI human sensing on 3× ESP32-S3 nodes and an NVIDIA Jetson Orin, with an on-device AI assistant you can ask
+about the room in plain English.**
+
+> *"How long was the room occupied this morning?"* · *"When did someone last come in?"* ·
+> *"Was there any long inactivity today?"* → answered on the Jetson, offline, from the sensing log.
+
+This builds on [WaveSense 3D](https://github.com/Anurag123rk/scanPHY): same firmware, sensing pipeline and dashboard,
+plus the **Ask AI** assistant (below) and two dashboard fixes (multi-person display, zoom).
+
+There's no camera and nothing to wear: the ESP32-S3 boards measure how a human body disturbs the WiFi channel, and
+a neural network on the Jetson turns that into presence, activity, position and breathing rate. The results are
+shown live in a monochrome 3D dashboard.
+
+![WaveSense 3D live dashboard](docs/screenshots/live-dark.png)
+
+| People counting | Auto-calibration |
+|---|---|
+| ![People tab](docs/screenshots/people.png) | ![Calibrate tab](docs/screenshots/calibrate.png) |
+| **On-device training** | **Models** |
+| ![Train tab](docs/screenshots/train.png) | ![Models tab](docs/screenshots/models.png) |
+| **Room and board setup** | **Light theme** |
+| ![Setup tab](docs/screenshots/setup.png) | ![Light theme](docs/screenshots/live-light.png) |
+
+<p align="center"><img src="docs/screenshots/mobile.png" width="260" alt="WaveSense 3D on a phone"></p>
+
+*Screenshots are from the built-in simulator (`python -m wavesense serve --source sim`); the "SIM TRUTH" label shows
+where the simulated person really is.*
+
+WaveSense 3D is a self-contained replacement for a RuView setup. It uses the same ports (UDP 5005 / HTTP 3000 / WS 3001)
+and the same 3-board triangle layout, and it adds a model that **trains itself on your room**.
+
+```
+ ┌──────────┐  WiFi   ┌─────────────────┐  CSI over UDP :5005  ┌────────────────────────────────┐
+ │  Router  │ ──────▶ │  ESP32-S3 × 3   │ ───────────────────▶ │ Jetson Orin · wavesense serve  │
+ └──────────┘ frames  │ WaveSense 3D fw │                      │  DSP → features → NN model     │
+      ▲               └─────────────────┘                      │  tracker · vitals · trainer    │
+      └──── pings (≈50 Hz) keep the router transmitting        └───────────────┬────────────────┘
+                                                                HTTP :3000 / WS :3001
+                                                                               ▼
+                                                                     3D dashboard (browser)
+```
+
+## Status
+
+| Feature | Status | Notes |
+|---|---|---|
+| Presence detection | ✅ works | 1+ node |
+| Activity (empty / still / moving) | ✅ works | 87–95 % on simulated rooms (1–3 boards) |
+| Breathing rate | ✅ works | single still person, < 3 m from a link |
+| Zone-level position (3×3 grid) | ✅ works after calibration | 3 nodes, triangle placement |
+| x/y coordinates | ⚠️ approximate | ~0.7 m error in simulation; calibrate your room |
+| Heart rate | 🧪 experimental | shown with an `EXP` tag |
+| People counting (0–3, moving / still) | ✅ works | one figure is drawn per counted person; only the main person is localised, extra people are drawn as outlined "≈ zone" estimates |
+| AI assistant (Ask tab) | ✅ works | local LLM (Qwen2.5-3B / Llama-3.2-3B, 4-bit) or rule-based fallback, see below |
+
+The accuracy figures come from the built-in physics simulator. Real rooms vary, so run the calibration wizard (below).
+
+> **Only one board and a Windows laptop?** Follow [docs/WINDOWS_SINGLE_NODE.md](docs/WINDOWS_SINGLE_NODE.md).
+
+## AI assistant (Ask tab)
+
+Every second the server logs what the pipeline saw (presence, activity, people counts, zone, position, breathing rate,
+board health) to `data/history.sqlite` (30-day retention; no raw CSI, no images). The **Ask AI** tab, `POST /api/ask`
+and `python -m wavesense ask "..."` answer questions about that log.
+
+```
+question ─▶ planner (LLM, JSON-grammar constrained) ─▶ {tool, time phrase, zone}
+         ─▶ tool over SQLite (exact numbers, template answer)
+         ─▶ writer (LLM) shortens the template to the asked fact
+         ─▶ number check: any number not in the tool result ⇒ use the template answer instead
+```
+
+The language model never does date maths or arithmetic: it picks one of 9 tools (`current_status`, `occupancy`,
+`people_at`, `presence_times`, `zone_usage`, `breathing`, `activity_breakdown`, `node_health`, `alerts`) and copies the
+time phrase, which a deterministic parser turns into an exact range. Questions about anything else are refused.
+
+```bash
+pip install -r requirements-llm.txt        # llama-cpp-python (Jetson: see the CUDA line in the file)
+./scripts/get_llm.sh                       # Qwen2.5-3B-Instruct Q4_K_M, ~2 GB, into models/llm/
+python -m wavesense serve --source sim --demo-history   # 2 days of synthetic history to try it
+python -m wavesense ask "how long was the room occupied this morning?"
+```
+
+Backends (`"assistant"` in `config/room.json`): `"auto"` (local GGUF if present, else rules), `"llama_cpp"`,
+`"openai"` (any OpenAI-compatible server, e.g. Ollama: `"base_url": "http://127.0.0.1:11434/v1", "model": "qwen2.5:3b"`)
+or `"rules"` (no LLM, keyword planner). Evaluate with `python -m wavesense.assistant.evaluate --system rules|llm|stuffing`.
+
+## Repository layout
+
+```
+wavesense/            Python package (runs on the Jetson)
+  server.py           UDP receiver + REST/WebSocket server + dashboard
+  engine.py           live pipeline: buffers → features → model → tracker → vitals
+  features.py         feature extraction (shared by inference and training)
+  model.py            NumPy-only inference runtime (no PyTorch needed to run)
+  autocal.py          automatic calibration (baseline, link health, rough router distance)
+  trainer.py          PyTorch trainer (CUDA on Jetson), ONNX export
+  autotrain.py        background training + hot model swap
+  simulator.py        physics-based multipath CSI simulator (training + demo)
+  dataset.py          labelled recordings captured from the dashboard
+  assistant/          AI assistant: history store, time parser, tools, LLM agent, evaluation
+  web/                dashboard (vanilla JS + three.js, works offline)
+firmware/wavesense-node/  ESP-IDF firmware for the ESP32-S3 nodes
+tools/              provision.py / flash_nodes.py (flash + configure boards)
+models/             wavesense-1node / 2node / 3node.npz (pretrained per board count) + .onnx,
+                    geometry.npz (router-distance estimator)
+scripts/            Jetson setup, PyTorch installer, systemd unit
+```
+
+## Quick start
+
+### 1. Jetson Orin
+
+```bash
+git clone https://github.com/Anurag123rk/Wavesense3D-AI.git
+cd Wavesense3D-AI
+./scripts/setup_jetson.sh --torch        # venv, deps, CUDA PyTorch; add --service to autostart
+.venv/bin/python -m wavesense serve --source sim   # demo, no hardware needed
+```
+
+Open `http://<jetson-ip>:3000`. In demo mode a simulated person walks around the room. The ◇ marker shows where the
+person really is, so you can compare it with the estimate.
+
+### 2. Firmware
+
+Get the binaries in one of two ways:
+- **CI:** download the `wavesense-node-firmware` artifact from the GitHub Actions run and unzip it into `firmware/release/`.
+- **Build it yourself** with ESP-IDF 5.2+, or with Docker:
+
+```bash
+cd firmware/wavesense-node
+docker run --rm -v "$PWD:/project" -w /project espressif/idf:v5.2.2 \
+  bash -c "idf.py set-target esp32s3 && idf.py build"
+```
+
+### 3. Flash and provision all three boards
+
+Plug the boards in over USB, then run:
+
+```bash
+pip install -r requirements-tools.txt
+python tools/flash_nodes.py --ssid "YOUR_WIFI" --password "YOUR_PASS" --target-ip <jetson-ip>
+```
+
+Each board gets node id 1, 2, 3 in turn, and the script then checks that every node is streaming. To configure a
+single board:
+`python tools/provision.py --port /dev/ttyACM0 --node-id 2 --ssid ... --password ... --target-ip <jetson-ip> --flash-firmware`
+
+Boards still running RuView firmware keep working, because the receiver understands their frame format too.
+
+### 4. Place the nodes and set up the room
+
+- Put the boards in a triangle around the room at desk height (about 1 m). Don't put them all on one wall.
+- In **Setup**, enter the room size and the position of the router and of each node, in metres, measured from one
+  floor corner.
+- Optional: upload a Blender `.glb` of your room. Set units to metres and the origin to the same floor corner.
+
+### 5. Run it
+
+```bash
+.venv/bin/python -m wavesense serve          # or: sudo systemctl start wavesense
+```
+
+### 6. Calibrate and auto-train (recommended)
+
+Open **Calibrate**:
+1. **Capture baseline.** Leave the room for 20 s.
+2. **Start wizard.** Stand still at each highlighted spot (10 s each). Then walk around, then leave.
+3. When the wizard finishes, the model is **fine-tuned on the Jetson GPU** with your recordings. It is evaluated and
+   **hot-swapped** into the live pipeline. Progress and learning curves are on the **Train** tab.
+
+With auto-train enabled, training also starts on its own after 8 new recordings.
+
+## Train anywhere, run on the Jetson
+
+A model is a single `.npz` file. Inference uses NumPy only, so you can train on any machine with PyTorch and load the
+result on the Jetson:
+
+```bash
+pip install -r requirements.txt -r requirements-train.txt
+# model for a given number of boards (synthetic data):
+python -m wavesense train --nodes 3 --hidden 384 --synthetic 200000 --config config/room.example.json \
+    --epochs 70 --onnx --out models/my-3node.npz
+# fine-tune on recordings copied from the Jetson (data/recordings/):
+python -m wavesense train --recordings data/recordings --config config/room.json \
+    --init models/wavesense-3node.npz --epochs 60 --onnx --out models/my-room.npz
+```
+
+Then **Models → Upload .npz** in the dashboard, or copy the file into `models/` on the Jetson and click **Activate**.
+The `.onnx` export has normalisation and softmax built in, so it is ready for TensorRT
+(`trtexec --onnx=models/my-room.onnx`).
+
+## Interfaces
+
+| | |
+|---|---|
+| UDP 5005 | CSI frames, WaveSense 3D v1 format (see `wavesense/protocol.py`); legacy `0xC5110001` frames are also accepted |
+| `http://host:3000` | dashboard |
+| `ws://host:3000/ws`, `ws://host:3001` | JSON state at 10 Hz: `presence, activity, x, y, confidence, zone, vitals, nodes…` |
+| REST | `/api/status`, `/api/config`, `/api/baseline`, `/api/record`, `/api/recordings`, `/api/train`, `/api/models`, `/api/ask`, `/api/assistant` … |
+
+CLI: `python -m wavesense serve | train | emulate | probe | info | ask`. Use `emulate` to send simulated node traffic over
+UDP, and `probe` to list which boards are streaming.
+
+## How it works
+
+1. **Firmware.** Each node pings the router at about 50 Hz and captures CSI (64 LLTF subcarriers) from every frame the
+   router sends back. It streams that CSI to the Jetson over UDP.
+2. **Features.** For each node, WaveSense 3D computes a gain-invariant log-amplitude profile across 13 subcarrier bands.
+   Over the last 1 s it measures how far that profile deviates from an empty-room baseline, how much it varies,
+   and RSSI. Over the last 4 s it adds slow variation per band and how much of the signal lies in the breathing
+   band (0.15–0.6 Hz) versus the walking band (0.6–2.5 Hz). With the node/router geometry, that gives 149 values.
+3. **Model.** A 3-layer MLP with LayerNorm has five output heads: activity (3 classes), zone (rows×cols), x/y,
+   and people counts (0–3 moving, 0–3 still). There is one built-in model per board count (1, 2 and 3 boards).
+   In `"model": "auto"` mode (the default), WaveSense 3D picks the one that matches how many boards are streaming
+   right now, so it keeps working when a board drops out.
+   The base model is pre-trained on a physics simulator: line-of-sight and wall/floor/ceiling reflections, body
+   scattering and blocking, breathing, and radio impairments, over randomised rooms. It is then fine-tuned on your own
+   recordings.
+4. **Tracker.** Smoothing, presence hysteresis, an uncertainty radius and a trail. When the room is confidently empty,
+   the baseline slowly adapts to drift.
+5. **Vitals.** While the person is still, breathing rate comes from PCA over the CSI bands followed by a spectral peak
+   search between 0.1 and 0.6 Hz.
+
+## Development
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q tests
+python -m wavesense serve --source sim --http-port 3000
+```
+
+MIT licence. three.js is bundled under its MIT licence (`wavesense/web/vendor/THREE_LICENSE`).
