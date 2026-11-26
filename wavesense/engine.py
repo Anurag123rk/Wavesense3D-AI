@@ -48,7 +48,8 @@ class NodeBuffer:
         self.last_seen = t
         self.total += 1
         if seq is not None:
-            if self.last_seq is not None and 0 < seq - self.last_seq < 1000:
+            # a restart resets the sequence (negative jump, ignored); allow gaps up to an hour of frames
+            if self.last_seq is not None and 0 < seq - self.last_seq < 360000:
                 self.lost += seq - self.last_seq - 1
             self.last_seq = seq
         while self.t and self.t[0] < t - HISTORY_S:
@@ -336,7 +337,10 @@ class Engine:
         amp = amplitudes(iq)[0]
         buf.addr = addr or buf.addr
         buf.channel, buf.n_sc = channel, n_sc
+        lost_before = buf.lost
         buf.push(t, amp, rssi, seq)
+        if buf.lost - lost_before >= 25:  # more than ~0.5 s of frames missing: log the network gap
+            self.log("node %d: %d frames missing (network gap)" % (buf.id, buf.lost - lost_before), "warn")
         if self.autocal_job is not None:
             a = self.autocal_job["slots"].setdefault(buf.id, {"t": [], "amp": [], "rssi": []})
             a["t"].append(t)
