@@ -134,8 +134,8 @@
     <div class="card-h"><span>ASK ABOUT THIS ROOM</span><span class="spacer"></span>
       <span class="pill" id="askBackend">assistant: …</span></div>
     <p class="muted">Ask in plain English about what the sensors recorded: occupancy, people counts, movement, zones,
-      breathing and board health. The language model only picks a query and phrases the reply; every number comes
-      from the sensing log, and a reply with a number that is not in the data is replaced by a plain template answer.</p>
+      breathing and board health. The language model only works out which query to run and for which time range; the answer
+      itself is computed from the sensing log, so every number in it comes from the data.</p>
     <div class="ask-log" id="askLog"></div>
     <div class="ask-chips" id="askChips"></div>
     <form class="ask-form" id="askForm" autocomplete="off">

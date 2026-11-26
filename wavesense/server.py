@@ -91,7 +91,7 @@ class Hub:
                 except Exception as exc:  # bad model path / server: still answer with the rules
                     log.warning("assistant backend failed (%s); using rule-based planner", exc)
                     backend = None
-                self.agent = Agent(self.history, backend, write=self.cfg.get("assistant", {}).get("write", True))
+                self.agent = Agent(self.history, backend, write=self.cfg.get("assistant", {}).get("write", False))
                 self.agent_status = "ready"
             return self.agent
 

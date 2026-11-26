@@ -95,7 +95,7 @@ def cmd_ask(a) -> int:
         cfg["assistant"]["backend"] = a.backend
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     store = HistoryStore(os.path.join(a.data, "history.sqlite"))
-    agent = Agent(store, make_backend(cfg, root), write=cfg["assistant"].get("write", True))
+    agent = Agent(store, make_backend(cfg, root), write=cfg["assistant"].get("write", False))
     r = agent.ask(" ".join(a.question))
     print(json.dumps(r, indent=1, default=str) if a.json else r["answer"])
     if not a.json:

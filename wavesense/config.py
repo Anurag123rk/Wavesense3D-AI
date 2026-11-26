@@ -37,7 +37,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # natural-language assistant over the sensing history (see wavesense/assistant)
     "assistant": {"backend": "auto", "model_path": "models/llm/qwen2.5-3b-instruct-q4_k_m.gguf",
                   "base_url": "http://127.0.0.1:11434/v1", "model": "qwen2.5:3b", "threads": None,
-                  "grammar": True, "write": True, "retention_days": 30},
+                  "grammar": True, "write": False, "retention_days": 30},
 }
 
 MAX_NODES = 3

@@ -68,8 +68,8 @@ and `python -m wavesense ask "..."` answer questions about that log.
 ```
 question ─▶ planner (LLM, JSON-grammar constrained) ─▶ {tool, time phrase, zone}
          ─▶ tool over SQLite (exact numbers, template answer)
-         ─▶ writer (LLM) shortens the template to the asked fact
-         ─▶ number check: any number not in the tool result ⇒ use the template answer instead
+         ─▶ answer: the tool's exact template sentence (default), or, with "write": true,
+            an LLM rewrite of it guarded by a number check (falls back to the template)
 ```
 
 The language model never does date maths or arithmetic: it picks one of 9 tools (`current_status`, `occupancy`,
@@ -82,6 +82,10 @@ pip install -r requirements-llm.txt        # llama-cpp-python (Jetson: see the C
 python -m wavesense serve --source sim --demo-history   # 2 days of synthetic history to try it
 python -m wavesense ask "how long was the room occupied this morning?"
 ```
+
+On the 87-question benchmark (`python -m wavesense.assistant.evaluate`), routing with Qwen2.5-3B and answering with
+templates was right 94.9 % of the time with no unsupported numbers; letting the LLM rewrite the answer lowered this
+to 83.5 %, and giving the LLM an hourly data table instead of tools gave 13.9 %. That is why `"write"` is off by default.
 
 Backends (`"assistant"` in `config/room.json`): `"auto"` (local GGUF if present, else rules), `"llama_cpp"`,
 `"openai"` (any OpenAI-compatible server, e.g. Ollama: `"base_url": "http://127.0.0.1:11434/v1", "model": "qwen2.5:3b"`)
